@@ -1,0 +1,9 @@
+venv/
+__pycache__/
+*.pyc
+.env
+credentials/service_account.json
+.DS_Store
+*.egg-info/
+data/embeddings/
+data/cache/

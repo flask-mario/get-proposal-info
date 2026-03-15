@@ -52,3 +52,51 @@ class VectorIndex:
             })
 
         return results
+
+    def search_by_indices(
+        self,
+        query_vector: np.ndarray,
+        target_indices: list[int],
+        top_k: int = 10,
+        threshold: float = 0.0,
+    ):
+        """지정된 인덱스들만 대상으로 코사인 유사도 검색.
+
+        Args:
+            query_vector: 쿼리 임베딩 벡터 (768,)
+            target_indices: 검색 대상 인덱스 리스트
+            top_k: 반환할 최대 결과 수
+            threshold: 최소 유사도 임계치
+
+        Returns:
+            list[dict]: [{"doc_id", "text", "score", "rank", "index"}, ...]
+        """
+        if not target_indices:
+            return []
+
+        q_norm = np.linalg.norm(query_vector)
+        if q_norm == 0:
+            return []
+        q_normalized = query_vector / q_norm
+
+        target_indices = np.array(target_indices)
+        subset = self.normalized[target_indices]
+        scores = subset @ q_normalized
+
+        sorted_order = np.argsort(scores)[::-1][:top_k]
+
+        results = []
+        for rank, order_idx in enumerate(sorted_order):
+            score = float(scores[order_idx])
+            if score < threshold:
+                break
+            orig_idx = int(target_indices[order_idx])
+            results.append({
+                "doc_id": self.doc_ids[orig_idx],
+                "text": self.texts[orig_idx],
+                "score": score,
+                "rank": rank + 1,
+                "index": orig_idx,
+            })
+
+        return results

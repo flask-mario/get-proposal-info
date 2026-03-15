@@ -12,6 +12,9 @@ def format_search_response(search_result: dict) -> list[dict]:
     Returns:
         list[dict]: Slack Block Kit blocks
     """
+    if search_result.get("is_list_mode"):
+        return format_list_response(search_result)
+
     blocks = []
     query = search_result["query"]
     answer = search_result.get("answer", "")
@@ -102,6 +105,65 @@ def format_search_response(search_result: dict) -> list[dict]:
         blocks.append({
             "type": "section",
             "text": {"type": "mrkdwn", "text": ":mag: 관련 제안서를 찾지 못했습니다. 다른 키워드로 검색해보세요."},
+        })
+
+    return blocks
+
+
+def format_list_response(search_result: dict) -> list[dict]:
+    """목록 모드 검색 결과를 compact한 Slack Block Kit 메시지로 변환."""
+    blocks = []
+    query = search_result["query"]
+    results = search_result.get("results", [])
+    results_count = search_result.get("results_count", 0)
+    response_time = search_result.get("response_time_ms", 0)
+
+    # 헤더
+    blocks.append({
+        "type": "header",
+        "text": {"type": "plain_text", "text": "제안서 검색 결과 (목록)", "emoji": True},
+    })
+
+    # 쿼리 정보
+    blocks.append({
+        "type": "context",
+        "elements": [
+            {"type": "mrkdwn", "text": f"*검색어:* {query} | *결과:* {results_count}건 | *응답시간:* {response_time}ms"},
+        ],
+    })
+
+    if not results:
+        blocks.append({"type": "divider"})
+        blocks.append({
+            "type": "section",
+            "text": {"type": "mrkdwn", "text": ":mag: 관련 제안서를 찾지 못했습니다. 다른 키워드로 검색해보세요."},
+        })
+        return blocks
+
+    # 결과를 번호매긴 compact 라인으로 변환
+    lines = []
+    for i, r in enumerate(results, 1):
+        meta = r.get("metadata", {})
+        client_name = meta.get("고객사명", "N/A")
+        project = meta.get("프로젝트명", "N/A")
+        domain = meta.get("도메인", "")
+        file_link = meta.get("파일링크", "")
+
+        line = f"{i}. *{client_name}* — {project}"
+        if domain:
+            line += f" | {domain}"
+        if file_link:
+            line += f" | <{file_link}|원본>"
+        lines.append(line)
+
+    # Slack mrkdwn 3000자 제한 → 10건씩 section block 분할
+    chunk_size = 10
+    blocks.append({"type": "divider"})
+    for start in range(0, len(lines), chunk_size):
+        chunk = lines[start:start + chunk_size]
+        blocks.append({
+            "type": "section",
+            "text": {"type": "mrkdwn", "text": "\n".join(chunk)},
         })
 
     return blocks

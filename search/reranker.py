@@ -44,7 +44,8 @@ RERANK_PROMPT = """\
   "results": [
     {{
       "rank": 1,
-      "index": <원본 인덱스>,
+      "index": <결과 번호 (0부터 시작)>,
+      "doc_id": "<해당 결과의 doc_id>",
       "relevance": "high|medium|low",
       "summary": "<데이터에 근거한 1-2문장 요약>"
     }}
@@ -80,7 +81,7 @@ def rerank(query: str, candidates: list[dict]) -> dict:
     candidate_texts = []
     for i, c in enumerate(candidates):
         candidate_texts.append(
-            f"[결과 {i + 1}] (유사도: {c['score']:.3f})\n{c['text']}"
+            f"[결과 {i}] (doc_id: {c['doc_id']}, 유사도: {c['score']:.3f})\n{c['text']}"
         )
     candidates_str = "\n\n---\n\n".join(candidate_texts)
 
@@ -109,8 +110,9 @@ def rerank(query: str, candidates: list[dict]) -> dict:
         return {
             "results": [
                 {
-                    "rank": c["rank"],
+                    "rank": i + 1,
                     "index": i,
+                    "doc_id": c["doc_id"],
                     "relevance": "medium",
                     "summary": c["text"][:200],
                 }

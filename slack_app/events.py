@@ -13,6 +13,12 @@ from search.searcher import search
 from sheets.request_logger import log_request_async
 
 
+@app.event("app_home_opened")
+def handle_app_home_opened(event, client):
+    """앱 홈 탭 열림 이벤트 — Slack 경고 방지용."""
+    pass
+
+
 @app.event("app_mention")
 def handle_mention(event, say, client):
     """@봇 멘션 이벤트 핸들러."""

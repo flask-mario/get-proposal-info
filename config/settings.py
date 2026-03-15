@@ -37,6 +37,7 @@ DEDUP_TOP_K = 10
 SIMILARITY_THRESHOLD = 0.3
 RERANK_TOP_N = 5
 DEDUP_NAME_THRESHOLD = 0.6
+LIST_MODE_MAX_RESULTS = 20
 
 # ── Paths ────────────────────────────────────────────────
 DATA_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), "data")

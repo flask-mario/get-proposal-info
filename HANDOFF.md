@@ -20,7 +20,7 @@
 
 ---
 
-## 2. 현재 상태: 완료됨 (Phase 1~5 전체 구현)
+## 2. 현재 상태: 완료됨 (Phase 1~5 전체 구현 + Phase 6 검색 품질 개선)
 
 ### 성공한 부분
 
@@ -37,6 +37,11 @@
 | Block Kit 응답 포맷 | ✅ | 관련도 이모지, 파일링크, 종합 답변 |
 | 21.requests 로깅 | ✅ | 비동기 로깅, 채널 display name 표시 |
 | Slack App 설정 가이드 | ✅ | `docs/slack_app_setup_guide.md` |
+| 목록 모드 (Phase 6) | ✅ | "의료 도메인 현황" 등 목록형 쿼리 → compact 리스트 반환 (최대 20건) |
+| 도메인 필터 보충 검색 (Phase 6) | ✅ | 도메인 키워드 감지 → 해당 도메인 메타데이터 필터링 보충 검색 |
+| 리랭커 doc_id 매핑 수정 (Phase 6) | ✅ | index 기반→doc_id 기반 매핑으로 정확도 개선 |
+| app_home_opened 핸들러 (Phase 6) | ✅ | Slack 경고 방지용 빈 핸들러 등록 |
+| 빈 메타데이터 후보 필터링 (Phase 6) | ✅ | 고객사명·프로젝트명 둘 다 비어있는 후보 제거 |
 
 ### 검증 완료된 테스트 쿼리
 
@@ -45,6 +50,7 @@
 "쿠버네티스 컨테이너 구축"    → K8s 관련 프로젝트 정상 반환
 "공공기관 클라우드 마이그레이션" → 공공 도메인 결과 정상 반환
 "케이뱅크"                  → 중복 5건 → 1건으로 정상 dedup
+"의료 도메인 제안서 현황"     → 목록 모드로 의료 도메인 제안서 compact 목록 반환
 ```
 
 ---
@@ -84,6 +90,20 @@
 - **문제**: background 실행 시 로그가 보이지 않음
 - **해결**: `PYTHONUNBUFFERED=1` 환경변수로 실행
 
+### 3.7 리랭커 인덱스 매핑 불일치 (Phase 6)
+- **문제**: Gemini 리랭커가 반환하는 `index` 값이 dedup 후 후보 배열의 인덱스와 불일치하여 엉뚱한 결과가 매핑됨
+- **해결**: 리랭커 프롬프트에 `doc_id`를 포함시키고, 결과 매핑을 `doc_id` 기반 1차 → `index` 기반 2차 fallback 으로 변경
+- **코드**: `search/reranker.py` — 프롬프트에 doc_id 추가, `search/searcher.py` — `candidates_by_doc_id` dict로 매핑
+
+### 3.8 카테고리 필터형 쿼리에서 벡터 검색만으로 결과 부족 (Phase 6)
+- **문제**: "의료 도메인 제안서 현황" 같은 쿼리에서 벡터 유사도만으로는 해당 도메인의 제안서가 충분히 검색되지 않음
+- **해결**: `search/query_processor.py`에 도메인 키워드 감지 추가 + `embedding/index.py`에 `search_by_indices()` 메서드 추가하여 해당 도메인 인덱스만 대상으로 보충 검색
+- **파이프라인 변경**: 벡터검색 top-30 → 도메인 필터 보충 → dedup → 리랭킹
+
+### 3.9 빈 메타데이터 결과 노출 (Phase 6)
+- **문제**: 고객사명·프로젝트명이 모두 비어있는 빈 행이 검색 결과에 포함됨
+- **해결**: `search/searcher.py`에서 메타데이터 매핑 후 고객사명·프로젝트명이 둘 다 비어있는 후보를 필터링
+
 ---
 
 ## 4. 아키텍처
@@ -98,12 +118,16 @@ Slack User
           ▼
     search/searcher.py::search()
           │
-          ├─ 1. 동의어 확장     search/query_processor.py   (32 aliases, <1ms)
-          ├─ 2. 쿼리 임베딩     embedding/embedder.py       (Vertex AI, ~200ms)
-          ├─ 3. 벡터 검색       embedding/index.py          (numpy cosine, <1ms, top-30)
-          ├─ 4. 메타데이터 매핑  sheets/loader.py            (인덱스→원본 데이터)
-          ├─ 5. 중복 제거       search/dedup.py             (유사 프로젝트 통합, top-10)
-          └─ 6. LLM 리랭킹     search/reranker.py          (Gemini, ~1-2s, top-5)
+          ├─ 1. 동의어 확장 + 모드 감지  search/query_processor.py  (32 aliases, 목록모드/도메인필터 감지)
+          ├─ 2. 쿼리 임베딩              embedding/embedder.py      (Vertex AI, ~200ms)
+          ├─ 3. 벡터 검색                embedding/index.py         (numpy cosine, <1ms, top-30)
+          ├─ 3.5 도메인 필터 보충 검색    embedding/index.py         (search_by_indices, 해당 도메인만)
+          ├─ 4. 메타데이터 매핑 + 빈 행 필터  sheets/loader.py      (인덱스→원본 데이터)
+          │
+          ├─ [목록 모드] → dedup top-20 → compact Block Kit 목록 반환 (리랭커 건너뜀)
+          │
+          ├─ 5. 중복 제거                search/dedup.py            (유사 프로젝트 통합, top-10)
+          └─ 6. LLM 리랭킹              search/reranker.py         (Gemini, ~1-2s, top-5, doc_id 매핑)
           │
           ▼
     slack_app/messages.py → Block Kit 응답
@@ -174,6 +198,7 @@ Slack User
 | `SIMILARITY_THRESHOLD` | 0.3 | 최소 유사도 컷오프 |
 | `RERANK_TOP_N` | 5 | 최종 결과 수 |
 | `DEDUP_NAME_THRESHOLD` | 0.6 | 동일 고객사 프로젝트명 유사도 임계치 |
+| `LIST_MODE_MAX_RESULTS` | 20 | 목록 모드 최대 반환 수 |
 
 ---
 
@@ -280,7 +305,6 @@ scripts/build_embeddings.py                   # 오프라인 빌드
 
 - **임베딩 증분 업데이트**: 현재는 전체 리빌드만 가능. 신규 행만 추가하는 증분 빌드 미구현.
 - **피드백 수집**: 21.requests의 `feedback` 컬럼이 비어 있음. Slack 버튼으로 피드백 수집하는 UI 미구현.
-- **app_home_opened 이벤트**: Slack 로그에 `Unhandled request` 경고 발생. 무해하지만 `@app.event("app_home_opened")` 핸들러 추가 가능.
 - **검색 품질 튜닝**: `SIMILARITY_THRESHOLD`, `DEDUP_NAME_THRESHOLD` 등 임계치를 실사용 데이터로 조정 가능.
 - **슬래시 커맨드 자동완성**: Slack API에서 커맨드 힌트/자동완성 미설정.
 
@@ -314,7 +338,7 @@ LLM_LOCATION=us-central1              # Gemini 리전 (별도!)
 | `INVALID_ARGUMENT: token count exceeds` | 임베딩 배치 너무 큼 | `EMBEDDING_BATCH_SIZE=20` 확인 (settings.py) |
 | `404 Model not found` (Gemini) | LLM 리전 미지원 | `LLM_LOCATION=us-central1` 확인 |
 | `429 RESOURCE_EXHAUSTED` | Vertex AI rate limit | 자동 재시도 동작 (5s→10s→20s 백오프) |
-| `Unhandled request app_home_opened` | 핸들러 미등록 | 무해한 경고. 필요시 `@app.event("app_home_opened")` 추가 |
+| `Unhandled request app_home_opened` | 핸들러 미등록 | ✅ 해결됨: `slack_app/events.py`에 빈 핸들러 등록 완료 |
 | Slack 응답 없음 | 봇이 채널에 미초대 | 채널에서 `/invite @제안서검색봇` |
 | 검색 결과 0건 | 유사도 임계치 너무 높음 | `SIMILARITY_THRESHOLD` 값 조정 (현재 0.3) |
 | gspread 인증 에러 | 서비스 계정 키 만료/권한 | credentials/service_account.json 갱신, Sheets 공유 확인 |
@@ -328,7 +352,7 @@ slack_bolt>=1.18.0          # Slack Bolt (Socket Mode)
 gspread>=6.0.0              # Google Sheets API
 google-auth>=2.28.0         # GCP 인증
 google-genai>=1.0.0         # Vertex AI (Embedding + Gemini)
-numpy>=1.26.0               # 벡터 연산
+numpy                       # 벡터 연산 (버전 제한 없음)
 python-dotenv>=1.0.0        # .env 파일 로드
 ```
 
@@ -346,5 +370,5 @@ Slack App 생성 시 필요한 설정 (상세: `docs/slack_app_setup_guide.md`):
 
 ---
 
-*최종 업데이트: 2026-03-03*
+*최종 업데이트: 2026-03-16*
 *GitHub: https://github.com/flask-mario/get-proposal-info*
